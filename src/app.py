@@ -5,11 +5,14 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 import os
 from pathlib import Path
+import json
+import secrets
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -18,6 +21,37 @@ app = FastAPI(title="Mergington High School API",
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+def load_teacher_credentials() -> dict[str, str]:
+    """Load teacher credentials from teachers.json."""
+    teachers_file = current_dir / "teachers.json"
+    if not teachers_file.exists():
+        return {}
+
+    with teachers_file.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    teachers = data.get("teachers", {})
+    if not isinstance(teachers, dict):
+        return {}
+    return {str(k): str(v) for k, v in teachers.items()}
+
+
+teachers = load_teacher_credentials()
+admin_sessions: dict[str, str] = {}
+
+
+def require_admin(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")) -> str:
+    """Validate admin session token from headers."""
+    if x_admin_token is None or x_admin_token not in admin_sessions:
+        raise HTTPException(status_code=401, detail="Admin login required")
+    return admin_sessions[x_admin_token]
 
 # In-memory activity database
 activities = {
@@ -88,8 +122,28 @@ def get_activities():
     return activities
 
 
+@app.post("/auth/login")
+def login_as_teacher(payload: LoginRequest):
+    """Authenticate a teacher and return an admin session token."""
+    expected_password = teachers.get(payload.username)
+    if expected_password is None or expected_password != payload.password:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = secrets.token_urlsafe(24)
+    admin_sessions[token] = payload.username
+    return {"token": token, "username": payload.username}
+
+
+@app.post("/auth/logout")
+def logout_teacher(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Invalidate the current admin token."""
+    if x_admin_token is not None:
+        admin_sessions.pop(x_admin_token, None)
+    return {"message": "Logged out"}
+
+
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, email: str, _: str = Depends(require_admin)):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -111,7 +165,7 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(activity_name: str, email: str, _: str = Depends(require_admin)):
     """Unregister a student from an activity"""
     # Validate activity exists
     if activity_name not in activities:
