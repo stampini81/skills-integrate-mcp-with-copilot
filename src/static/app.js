@@ -14,9 +14,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const loginForm = document.getElementById("login-form");
   const usernameInput = document.getElementById("username");
   const passwordInput = document.getElementById("password");
+  const categoryFilter = document.getElementById("category-filter");
 
   let adminToken = localStorage.getItem("adminToken") || "";
   let adminUsername = localStorage.getItem("adminUsername") || "";
+  let activeCategory = "";
 
   function isLoggedIn() {
     return adminToken !== "";
@@ -89,10 +91,46 @@ document.addEventListener("DOMContentLoaded", () => {
     showMessage("Logged out.", "info");
   }
 
+  // Load category rule sets and populate filter buttons
+  async function loadCategories() {
+    try {
+      const response = await fetch("/categories");
+      const categories = await response.json();
+
+      // Wire up the existing "All" button
+      const allBtn = categoryFilter.querySelector('[data-category=""]');
+      if (allBtn) {
+        allBtn.addEventListener("click", () => setActiveCategory(""));
+      }
+
+      categories.forEach((category) => {
+        const btn = document.createElement("button");
+        btn.className = "filter-btn";
+        btn.dataset.category = category;
+        btn.textContent = category;
+        btn.addEventListener("click", () => setActiveCategory(category));
+        categoryFilter.appendChild(btn);
+      });
+    } catch (error) {
+      console.error("Error loading categories:", error);
+    }
+  }
+
+  function setActiveCategory(category) {
+    activeCategory = category;
+    categoryFilter.querySelectorAll(".filter-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.category === activeCategory);
+    });
+    fetchActivities();
+  }
+
   // Function to fetch activities from API
   async function fetchActivities() {
     try {
-      const response = await fetch("/activities");
+      const url = activeCategory
+        ? `/activities?category=${encodeURIComponent(activeCategory)}`
+        : "/activities";
+      const response = await fetch(url);
       const activities = await response.json();
 
       // Clear loading message
@@ -128,6 +166,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         activityCard.innerHTML = `
           <h4>${name}</h4>
+          ${details.category ? `<span class="category-badge">${details.category}</span>` : ""}
           <p>${details.description}</p>
           <p><strong>Schedule:</strong> ${details.schedule}</p>
           <p><strong>Availability:</strong> ${spotsLeft} spots left</p>
@@ -276,5 +315,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Initialize app
   updateAuthUI();
+  loadCategories();
   fetchActivities();
 });
